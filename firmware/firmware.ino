@@ -95,8 +95,8 @@ bool debug = false;
 #define PIN_STP_EN_UC  (23)
 
 /* Array of HV relay pins and names. */
-int hv_relays[6] = {KC1,KC2,KC4,KC3,KC6,KC5};
-const char *hv_relay_names[6] = {"KC1","KC2","KC4","KC3","KC6","KC5"};
+int hv_relays[6] = {KC1,KC2,KC3,KC4,KC5,KC6};
+const char *hv_relay_names[6] = {"KC1","KC2","KC3","KC4","KC5","KC6"};
 int tec_relays[3] = {TEC_CTRL1, TEC_CTRL2, TEC_CTRL3};
 const char *tec_relay_names[3] = {"TEC_CTRL1", "TEC_CTRL2", "TEC_CTRL3"};
 int thermistors[4] = {THERMISTOR1, THERMISTOR2, THERMISTOR3, TEC_SENSE};
@@ -283,6 +283,7 @@ int reset()
     pinMode(PIN_CS,OUTPUT);
     digitalWrite(PIN_CS,HIGH);
 
+    enable_dac();
     return rv;
 }
 
@@ -323,7 +324,8 @@ int set_attenuation(bool ison)
 }
 
 uint16_t DAC_WRITE_THROUGH = 0x4000;
-uint16_t DAC_POWER_DOWN = 0x8000;
+uint16_t DAC_POWER_UP = 0x8000;
+uint16_t DAC_POWER_DOWN = 0x8800;
 uint16_t DAC_NO_OP = 0x0000;
 uint16_t DAC_POWER_DOWN_NORMAL = 0x0000;
 uint16_t DAC_POWER_DOWN_HIGH = 0x400;
@@ -331,7 +333,7 @@ uint16_t DAC_POWER_DOWN_GND_100K = 0x800;
 uint16_t DAC_POWER_DOWN_GND_1K = 0xc00;
 float DAC_VREF = 2.048;
 
-double HV_R1 = 1e9;
+double HV_R1 = 1e6;
 double HV_R2 = 14e3;
 
 /* Set the DC DC boost converter output voltage to a given value.
@@ -345,8 +347,9 @@ int set_hv(float value)
      * R1 = R2(Vout2/Vref - 1)
      * R1/R2 = Vout2/Vref - 1
      * R1/R2 + 1 = Vout2/Vref
-     * Vref = Vout2/(R1/R2 + 1) */
-    float vref = value/(HV_R1/HV_R2 + 1);
+     * Vref = Vout2/(R1/R2 + 1)
+     * Vapd=Vout2-5*/
+    float vref = (value+5)/(HV_R1/HV_R2 + 1);
     return set_dac(vref);
 }
 
@@ -354,14 +357,16 @@ int set_hv(float value)
  * Returns 0 on success, -1 on error. */
 int disable_hv(void)
 {
-    uint16_t code = DAC_POWER_DOWN | DAC_POWER_DOWN_GND_100K;
+    //uint16_t code = DAC_POWER_DOWN | DAC_POWER_DOWN_GND_100K;
     /* Set the HV dac pin select on (low). */
     digitalWrite(PIN_CS,LOW);
     SPI.beginTransaction(SPISettings(14000000, MSBFIRST, SPI_MODE1));
-    SPI.transfer16(DAC_WRITE_THROUGH | code);
+    //SPI.transfer16(DAC_WRITE_THROUGH | code);
+    SPI.transfer16(DAC_POWER_DOWN | DAC_POWER_DOWN_GND_100K);
     delay(DELAY);
     SPI.endTransaction();
     digitalWrite(PIN_CS,HIGH);
+    Serial.println("hv disabled");
     return 0;
 }
 
@@ -377,7 +382,9 @@ int disable_hv(void)
  * the falling edge, but I can't be sure. */
 int set_dac(float value)
 {
-    uint16_t code = value*0x10000000000000/DAC_VREF;
+    //uint16_t code = value*0x10000000000000/DAC_VREF;
+    uint16_t voltcode = (value/DAC_VREF)*16384;
+    uint16_t code =  voltcode | 0x4000;
     /* Set the HV dac pin select on (low). */
     digitalWrite(PIN_CS,LOW);
     SPI.beginTransaction(SPISettings(14000000, MSBFIRST, SPI_MODE1));
@@ -385,9 +392,18 @@ int set_dac(float value)
     delay(DELAY);
     SPI.endTransaction();
     digitalWrite(PIN_CS,HIGH);
+    Serial.println("boost set done");
     return 0;
 }
-
+int enable_dac(){
+    digitalWrite(PIN_CS,LOW);
+    SPI.beginTransaction(SPISettings(14000000, MSBFIRST, SPI_MODE1));
+    SPI.transfer16(DAC_POWER_DOWN | DAC_POWER_DOWN_NORMAL);
+    delay(DELAY);
+    SPI.endTransaction();
+    digitalWrite(PIN_CS,HIGH);
+    return 0;
+}
 void setup()
 {
     Serial.begin(9600);
@@ -1046,6 +1062,17 @@ int do_command(char *cmd, float *value)
         }
 
         *value = (float) temp;
+        return 2;
+    } else if (!strcmp(tokens[0], "enable_dac")) {
+        if (ntok != 1) {
+            sprintf(err, "enable_dac command expects no arguments");
+            return -1;
+        }
+
+        if (enable_dac()) {
+            sprintf(err, "error enabling the dac for HV boost converter");
+            return -1;
+        }
         return 2;
     } else if (!strcmp(tokens[0], "set_hv")) {
         if (ntok != 2) {
