@@ -72,6 +72,7 @@ bool debug = false;
 #define TEC_CTRL1 4
 #define TEC_CTRL2 5
 #define TEC_CTRL3 6
+#define THERMISTOR_local 7
 
 /* Teensy outputs. */
 #define PIN_MR1       (36)
